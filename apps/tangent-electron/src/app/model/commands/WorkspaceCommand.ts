@@ -8,15 +8,30 @@ export interface PaletteAction {
 	shortcuts?: string[] | null
 }
 
+export interface WorkspaceCommandContext extends CommandContext {
+	context?: 'main-menu' // Add more like context-menu, command-palette, etc. as needed
+}
+
 export default abstract class WorkspaceCommand extends Command {
 
 	readonly workspace: Workspace
+
+	private _id: string
 
 	constructor(workspace: Workspace, options?: CommandOptions) {
 		super(options)
 		this.workspace = workspace
 	}
+	
+	get id () { return this._id }
+	set id (id: string) {
+		if (this._id) {
+			console.error(`Attempted to give workspace command with an existing id of "${this._id}" a new id "${id}". Ids should only be set once.`)
+		}
+		this._id = id 
+	}
 
+	/** Describes the command in the context of shortcuts and debugging */
 	getName() {
 		return this.getLabel()
 	}
@@ -31,7 +46,8 @@ export default abstract class WorkspaceCommand extends Command {
 			return [{
 				name,
 				command: this,
-				context: this.getDefaultPaletteContext()
+				context: this.getDefaultPaletteContext(),
+				shortcuts: this.shortcuts
 			}]
 		}
 		return []

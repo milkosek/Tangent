@@ -18,22 +18,26 @@ interface GetMatches_Base {
 	 */
 	fuzzy?: boolean
 
+	
+
+	/**
+	 * If present, all nodes must pass this test to be included
+	 */
+	filter?: TreePredicate
+}
+
+interface GetMatches_Nodes {
 	/**
 	 * If true, only the results with the lowest distance will be returned
 	 * Incompatible with `orderByDistance`
 	 */
-	bestOnly?: boolean
+	bestOnly?: true
 
 	/**
 	 * If true, results will be ordered with lowest distance first
 	 * Incompatible with `bestOnly`
 	 */
 	orderByDistance?: boolean
-
-	/**
-	 * If present, all nodes must pass this test to be included
-	 */
-	filter?: TreePredicate
 }
 
 interface GetMatches_Matches {
@@ -44,7 +48,7 @@ interface GetMatches_Array {
 	alwaysReturnArray: true
 }
 
-type GetMatches_Internal = GetMatches_Base & Partial<GetMatches_Matches>
+type GetMatches_Internal = GetMatches_Base & GetMatches_Nodes & Partial<GetMatches_Matches>
 type GetMatchesOptions = GetMatches_Internal & Partial<GetMatches_Array>
 
 interface getPathOptions {
@@ -418,18 +422,36 @@ export default class DirectoryStore extends SelfStore implements DirectoryLookup
 		return this.roots
 	}
 
-	getMatchesForPath(pathMatch: string | PathMatch, options?: GetMatches_Base): TreeNode | TreeNode[]
+	getMatchesForPath(pathMatch: string | PathMatch, options?: GetMatches_Base & GetMatches_Nodes): TreeNode | TreeNode[]
 	getMatchesForPath(pathMatch: string | PathMatch, options?: GetMatches_Base & GetMatches_Array): TreeNode[]
-	getMatchesForPath(pathMatch: string | PathMatch, options?: GetMatches_Base & GetMatches_Matches): SegmentSearchNodePair | SegmentSearchNodePair[]
-	getMatchesForPath(pathMatch: string | PathMatch, options?: GetMatches_Base & GetMatches_Matches & GetMatches_Array): SegmentSearchNodePair[]
+	getMatchesForPath(pathMatch: string | PathMatch, options?: GetMatches_Base & GetMatches_Matches): SegmentSearchNodePair[]
 	getMatchesForPath(pathMatch: string | PathMatch, options?: GetMatchesOptions): TreeNode | TreeNode[] | SegmentSearchNodePair | SegmentSearchNodePair[] {
 		options = options ?? {}
 
 		const roots = this.getRootsForOptions(options)
 
-		let result: TreeNode[] = []
+		let result: TreeNode[] | SegmentSearchNodePair[] = []
 
 		if (typeof pathMatch === 'string') {
+
+			if (pathMatch.endsWith('/')) {
+				// Strip the trailing slash
+				pathMatch = pathMatch.substring(0, pathMatch.length - 1)
+
+				// Require that the node be a folder
+				const oldFilter = options.filter
+				if (oldFilter) {
+					options.filter = item => {
+						if (item.fileType !== 'folder') return false
+						return oldFilter ? oldFilter(item) : true
+					}
+				}
+				else {
+					options.filter = item => item.fileType === 'folder'
+				}
+				
+			}
+
 			pathMatch = buildMatcher(pathMatch, { ...options, caseSensitive: this.caseSensitive })
 		}
 
@@ -444,11 +466,15 @@ export default class DirectoryStore extends SelfStore implements DirectoryLookup
 
 		if (options.bestOnly && result.length > 1) {
 			let lowestDistance = Number.POSITIVE_INFINITY
+			let shortestNameLength = Number.POSITIVE_INFINITY
 
-			let annotatedResult = result.map(item => {
+			let annotatedResult = (result as TreeNode[]).map(item => {
 				let details = this.getDistanceBetween(item, origin)
 				if (lowestDistance > details.distance) {
 					lowestDistance = details.distance
+				}
+				if (shortestNameLength > item.name.length) {
+					shortestNameLength = item.name.length
 				}
 				return {
 					item,
@@ -456,29 +482,35 @@ export default class DirectoryStore extends SelfStore implements DirectoryLookup
 				}
 			})
 
-			result = []
+			let bestNodes: TreeNode[] = []
 
 			for (let item of annotatedResult) {
-				if (item.distance === lowestDistance) {
-					result.push(item.item)
+				if (
+					item.distance === lowestDistance
+					// Theory here is that shorter names have a better match/source ratio
+					&& item.item.name.length === shortestNameLength)
+				{
+					bestNodes.push(item.item)
 				}
 			}
 
-			if (result.length === 2) {
+			if (bestNodes.length === 2) {
 				// When a link resolves to a file and a note with the same name at the same
 				// level, prefer the file over the folder.
 				// A way for a note to also be a namespace.
 				// Original Request: https://github.com/suchnsuch/Tangent/issues/115
-				const a = result[0]
-				const b = result[1]
+				const a = bestNodes[0]
+				const b = bestNodes[1]
 				if (a.name === b.name && ((a.fileType === 'folder') !== (b.fileType === 'folder'))) {
-					result = result.filter(r => r.fileType !== 'folder')
+					bestNodes = bestNodes.filter(r => r.fileType !== 'folder')
 				}
 			}
+
+			result = bestNodes
 		}
 		else if (options.orderByDistance && result.length > 1) {
 			// Annotate the result so that distance is calculated once
-			let annotatedResult = result.map(item => {
+			let annotatedResult = (result as TreeNode[]).map(item => {
 				return {
 					item,
 					distance: this.getDistanceBetween(item, origin).distance
@@ -493,8 +525,8 @@ export default class DirectoryStore extends SelfStore implements DirectoryLookup
 			// Remap the result
 			result = annotatedResult.map(i => i.item)
 		}
-
-		if (options.alwaysReturnArray) {
+	
+		if (options.alwaysReturnArray || 'includeMatches' in options) {
 			return result
 		} 
 		return result.length === 1 ? result[0] : result
@@ -589,18 +621,31 @@ export default class DirectoryStore extends SelfStore implements DirectoryLookup
 		let length = options.length || 'full'
 		const root = this.getRoot(target)
 
-		let walker = this.getParent(target)
-		while (walker && walker !== root) {
+		let walker = target
+
+		const matchesOptions = {
+			root: options.root ?? root,
+			bestOnly: true
+		} as const
+
+		while (walker) {
 			if (length !== 'full') {
-				const result = this.getMatchesForPath(path, {
-					root: options.root ?? root,
-					bestOnly: true
-				})
+				const result = this.getMatchesForPath(path, matchesOptions)
 				if (result === target) break
+				if (target.name === path && !Array.isArray(result) && target.fileType === 'folder'
+					&& result.fileType !== 'folder' && result.name === path
+				) {
+					const disambiguatedResult = this.getMatchesForPath(path + '/', matchesOptions)
+					if (disambiguatedResult === target) {
+						return path + '/'
+					}
+				}
 			}
 
-			path = walker.name + '/' + path
 			walker = this.getParent(walker)
+			if (walker === root) break
+
+			path = walker.name + '/' + path
 		}
 
 		return path

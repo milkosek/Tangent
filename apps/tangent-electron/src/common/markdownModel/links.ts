@@ -50,51 +50,118 @@ export function matchWikiLink(text: string, startIndex=0, options?: {
 	return null
 }
 
-export const linkStartMatcher = /(\[)([^\[\]\n]*)(\])(\()/
-const bracketMatch = /[\(\)]/ 
+// A `[` that is at the beginning of a string or has a non=`\` character in front
+const linkStartMatcher = /(?<=^|[^\\])(\[)/
 
+/**
+ * Identifies and extracts information about a markdown link in a string
+ * @param text The text to check and extract markdown link information from
+ * @param startIndex An offset to be applied to the found information (e.g. if the provided text is a slice of a larger string.)
+ * @returns Information about the matched link, or null if no link was found
+ */
 export function matchMarkdownLink(text: string, startIndex=0): LinkInfo {
 	const match = text.match(linkStartMatcher)
-	if (match) {
+	if (!match) return null
 
-		const linkStart = match.index + match[0].length
+	const linkStart = match.index
 
-		let depth = 1
-		let index = linkStart + 1
-		for (; depth > 0 && index < text.length; index++) {
-			let char = text[index]
-			if (char === '(') {
-				depth++
-			}
-			else if (char === ')') {
-				depth--
-			}
+	// Move through matched `[]` pairs
+	let depth = 1
+	let index = linkStart + 1
+	for (; depth > 0 && index < text.length; index++) {
+		let char = text[index]
+		if (char === '[') {
+			depth++
 		}
-
-		if (depth !== 0 || text[index - 1] !== ')') {
-			return null
+		else if (char === ']') {
+			depth--
 		}
-
-		let href = text.substring(linkStart, index - 1)
-		const idIndex = href.indexOf('#')
-		const content_id = idIndex >= 0 ? href.substring(idIndex + 1) : undefined
-		href = idIndex >= 0 ? href.substring(0, idIndex) : href
-
-		let details: LinkInfo = {
-			type: StructureType.Link,
-			form: 'md',
-			start: startIndex + match.index,
-			end: startIndex + index,
-			href,
-			content_id
+		else if (char === '\\') {
+			// Jump the next character
+			index++
 		}
-
-		if (match[2]) {
-			details.text = match[2]
-		}
-		return details
 	}
-	return null
+
+	const textEnd = index - 1
+
+	if (depth !== 0 || text[textEnd] !== ']') {
+		// A matching `]` could not be found
+		return null
+	}
+
+	// The next char should be a `(`
+	if (text[index] !== '(') return null
+	
+	index++ 
+	depth = 1
+	const hrefStart = index
+	
+	let hrefEnd = -1
+	let contentIdStart = -1
+	let contentIdEnd = -1
+	let titleStart = -1
+	let titleEnd = -1
+
+	// Move through matched `()` pairs, finding content id & title
+	for (; depth > 0 && index < text.length; index++) {
+		let char = text[index]
+		if (char === '(') {
+			depth++
+		}
+		else if (char === ')') {
+			depth--
+		}
+		else if (char === '#' && depth === 1) {
+			if (hrefEnd === -1) hrefEnd = index
+			contentIdStart = index + 1
+		}
+		else if (char === ' ' && depth === 1 && titleStart === -1 && text[index + 1] === '"') {
+			if (hrefEnd === -1) hrefEnd = index
+			if (contentIdStart > 0) contentIdEnd = index
+			titleStart = index + 2
+			index++ // Hop the `"`
+		}
+		else if (char === '"' && depth === 1 && titleStart > 0) {
+			titleEnd = index
+		}
+		else if (char === '\\' && titleStart > 0) {
+			index++ // Hop the next character
+		}
+	}
+
+	if (depth !== 0 || text[index - 1] !== ')') {
+		return null
+	}
+
+	if (hrefEnd === -1) hrefEnd = index - 1
+
+	if (contentIdStart > 0 && contentIdEnd === -1 && titleStart === -1) {
+		contentIdEnd = index - 1
+	}
+
+	if (contentIdStart > 0 && contentIdEnd === -1 || titleStart > 0 && titleEnd === -1) {
+		return null
+	}
+
+	const href = text.substring(hrefStart, hrefEnd)
+	const content_id = contentIdStart >= 0 ? text.substring(contentIdStart, contentIdEnd) : undefined
+	const title = titleStart >= 0 ? text.substring(titleStart, titleEnd).replaceAll('\\', '') : undefined
+
+	const details: LinkInfo = {
+		type: StructureType.Link,
+		form: 'md',
+		start: startIndex + linkStart,
+		end: startIndex + index,
+		href,
+		content_id,
+		title
+	}
+
+	if (linkStart + 1 !== textEnd) {
+		details.text = text.substring(linkStart + 1, textEnd)
+	}
+
+	return details
 }
 
 export function findLinkAround(doc: TextDocument, position: number, linkMatcher: (text: string, startIndex: number) => LinkInfo) {
@@ -328,7 +395,9 @@ export function parseLink(char: string, parser: NoteParser): boolean {
 			hiddenGroup: true
 		})
 
-		let slashIndex = wikiLinkInfo.href.lastIndexOf('/')
+		const endsWithSlash = wikiLinkInfo.href.at(-1) === '/'
+		const slashIndex = wikiLinkInfo.href.lastIndexOf('/', endsWithSlash ? wikiLinkInfo.href.length - 2 : undefined)
+		const effectiveLength = wikiLinkInfo.href.length - (endsWithSlash ? 1 : 0)
 		if (slashIndex >= 0) {
 			// Hide the directory section of the link
 			feed.next(slashIndex + 1)
@@ -339,10 +408,10 @@ export function parseLink(char: string, parser: NoteParser): boolean {
 				hidden: true
 			})
 
-			feed.nextByLength(wikiLinkInfo.href.length - slashIndex - 1)
+			feed.nextByLength(effectiveLength - slashIndex - 1)
 		}
 		else {
-			feed.nextByLength(wikiLinkInfo.href.length)
+			feed.nextByLength(effectiveLength)
 		}
 
 		// Close the href portion
@@ -350,6 +419,16 @@ export function parseLink(char: string, parser: NoteParser): boolean {
 			link_internal: 'href',
 			spellcheck: false
 		})
+
+		// Hide the trailing slash
+		if (endsWithSlash) {
+			feed.next()
+			parser.commitSpan({
+				link_internal: 'href directory',
+				spellcheck: false,
+				hidden: true
+			})
+		}
 
 		if (wikiLinkInfo.content_id != undefined) {
 			// Mark and consume the `#`
@@ -406,7 +485,8 @@ export function parseLink(char: string, parser: NoteParser): boolean {
 			href: mdLinkInfo.href,
 			form: 'md',
 			text: mdLinkInfo.text ?? null,
-			content_id: mdLinkInfo.content_id ?? null
+			content_id: mdLinkInfo.content_id ?? null,
+			title: mdLinkInfo.title ?? null
 		}
 
 		// Avoiding adding the key unless the value exists
@@ -543,6 +623,10 @@ function finishMarkdownLink(parser: NoteParser, linkInfo: LinkInfo, offset=0) {
 	if (linkInfo.content_id !== undefined) {
 		// Consume the '#' character and the id
 		feed.nextByLength(1 + linkInfo.content_id.length)
+	}
+	if (linkInfo.title !== undefined) {
+		// Consume the leading ` "` and trailing `"`
+		feed.nextByLength(3 + linkInfo.title.length)
 	}
 	parser.commitSpan({
 		link_internal: true,

@@ -6,6 +6,7 @@ import type { Workspace } from 'app/model'
 import type EmbedFile from 'app/model/EmbedFile'
 import { HandleResult, isNode } from 'app/model/NodeHandle'
 import type { UrlDataError, WebsiteData } from 'common/urlData'
+    import PdfPreview from 'app/views/node-views/PdfPreview.svelte';
 
 type Form = {
 	mode: 'error'
@@ -21,6 +22,9 @@ type Form = {
 	src: string
 } | {
 	mode: 'video'
+	src: string
+} | {
+	mode: 'pdf',
 	src: string
 } | {
 	mode: 'youtube'
@@ -88,6 +92,12 @@ function onNodeHandleChanged(value: HandleResult) {
 					src: (value as EmbedFile).cacheBustPath
 				}
 				break
+			case EmbedType.PDF:
+				form = {
+					mode: 'pdf',
+					src: (value as EmbedFile).cacheBustPath
+				}
+				break
 			default:
 				error(`Invalid file type. Cannot embed a "${value.fileType}" file.`)
 				break
@@ -141,6 +151,12 @@ function onNodeHandleChanged(value: HandleResult) {
 	}
 	else if (value.mediaType === 'error') {
 		error((value as UrlDataError).message)
+	}
+	else if (link.href.endsWith('.pdf')) {
+		form = {
+			mode: 'pdf',
+			src: link.href
+		}
 	}
 	else {
 		// Fall back to website info
@@ -211,7 +227,7 @@ function websiteStyle(form: WebsiteData) {
 }
 
 function websiteImageStyle(form: WebsiteData) {
-	if (form.images.length) {
+	if (form.images?.length) {
 		return `background: url("${form.images[0]}"); background-size: cover;`
 	}
 	return ''
@@ -289,10 +305,17 @@ function websiteImageStyle(form: WebsiteData) {
 			<media-fullscreen-button/>
 		</media-control-bar>
 	</media-controller>
+{:else if form.mode === 'pdf'}
+	<div class="pdf">
+		<PdfPreview path={form.src} />
+		<div class="pdf-cover"></div>
+	</div>
 {:else if form.mode === 'website'}
 	<div class={'website-preview ' + form.mediaType} class:description={form.description} style={websiteStyle(form)}>
 		<div class="info">
-			<h1>{form.title.trim()}</h1>
+			{#if form.title}
+				<h1>{form.title.trim()}</h1>
+			{/if}
 			{#if form.description}
 				<p>
 					{form.description}
@@ -383,6 +406,18 @@ function websiteImageStyle(form: WebsiteData) {
 			white-space: nowrap;
 			text-overflow: ellipsis;
 		}
+	}
+}
+
+.pdf {
+	position: relative;
+	width: 100%;
+	min-height: 16em;
+
+	.pdf-cover {
+		position: absolute;
+		inset: 0;
+		background: linear-gradient(180deg, transparent 75%, var(--noteBackgroundColor) 100%);
 	}
 }
 

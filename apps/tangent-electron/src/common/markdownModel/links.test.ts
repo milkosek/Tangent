@@ -26,7 +26,7 @@ describe('Markdown Links', () => {
 		})
 	})
 
-	it('should be able to handle nested brackets', () => {
+	it('should be able to handle nested brackets within the href', () => {
 		expect(matchMarkdownLink('[text](link())')).toEqual({
 			type: StructureType.Link,
 			start: 0,
@@ -64,6 +64,28 @@ describe('Markdown Links', () => {
 		})
 	})
 
+	it('Should handle paired brackets within the text', () => {
+		expect(matchMarkdownLink('My [md [link]](with/an/href)')).toEqual({
+			type: StructureType.Link,
+			start: 3,
+			end: 28,
+			form: 'md',
+			text: 'md [link]',
+			href: 'with/an/href'
+		})
+	})
+
+	it('Should ignore escaped brackets within the text', () => {
+		expect(matchMarkdownLink('My [md \\[link\\]](with/an/href)')).toEqual({
+			type: StructureType.Link,
+			start: 3,
+			end: 30,
+			form: 'md',
+			text: 'md \\[link\\]',
+			href: 'with/an/href'
+		})
+	})
+
 	it('Parses headers to content_id', () => {
 		expect(matchMarkdownLink('[text](link#header)')).toEqual({
 			type: StructureType.Link,
@@ -85,6 +107,30 @@ describe('Markdown Links', () => {
 			text: 'text',
 			href: 'link',
 			content_id: ''
+		})
+	})
+
+	it('Can extract custom title text', () => {
+		expect(matchMarkdownLink('foo [text](link "Title") boo')).toEqual({
+			type: StructureType.Link,
+			start: 4,
+			end: 24,
+			form: 'md',
+			text: 'text',
+			href: 'link',
+			title: 'Title'
+		})
+	})
+
+	it('Supports multi-word titles with escapes', () => {
+		expect(matchMarkdownLink('foo [text](link "Title of \\"Doom\\"") boo')).toEqual({
+			type: StructureType.Link,
+			start: 4,
+			end: 36,
+			form: 'md',
+			text: 'text',
+			href: 'link',
+			title: 'Title of "Doom"'
 		})
 	})
 })

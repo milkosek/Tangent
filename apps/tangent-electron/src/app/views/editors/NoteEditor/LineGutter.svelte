@@ -1,12 +1,11 @@
 <script lang="ts">
 import { onDestroy } from 'svelte'
 import { computePosition } from '@floating-ui/dom'
-import SvgIcon from 'app/views/smart-icons/SVGIcon.svelte'
-import { isLineCollapsible } from 'common/markdownModel/sections'
 import type MarkdownEditor from './MarkdownEditor'
 
 export let editor: MarkdownEditor
 export let target: { element: HTMLElement, index: number }
+export let side: 'left'|'right'
 
 let doc = editor.doc
 
@@ -20,12 +19,6 @@ function onEditorChanged() {
 	doc = editor.doc
 }
 
-$: lineCollapseIcon = getLineCollapseIcon(target?.index ?? -1)
-function getLineCollapseIcon(index: number) {
-	return index >= 0 && editor.collapsingSections.lineHasCollapsedChildren(index) ?
-		"collapse.svg#closed" : "collapse.svg#open"
-}
-
 let container: HTMLElement = null
 
 $: positionOnLine(target?.element, container)
@@ -34,7 +27,7 @@ function positionOnLine(line: HTMLElement, container: HTMLElement) {
 
 	computePosition(line, container, {
 		strategy: 'absolute',
-		placement: 'left-start'
+		placement: side === 'left' ? 'left-start' : 'right-start'
 	}).then(result => {
 		const lineStyle = getComputedStyle(line)
 		const marginLeft = parseFloat(lineStyle.marginLeft)
@@ -48,26 +41,12 @@ function positionOnLine(line: HTMLElement, container: HTMLElement) {
 	})
 }
 
-function toggleLineCollapse() {
-	const index = target?.index
-	if (index !== undefined) {
-		editor.collapsingSections.toggleLineCollapsed(index)
-		lineCollapseIcon = getLineCollapseIcon(index)
-	}
-}
-
 </script>
 
 {#if target?.element}
 <!-- svelte-ignore a11y-no-static-element-interactions -->
-<div bind:this={container}>
-	{#if isLineCollapsible(doc.lines, target.index)}
-		<button class="subtle collapse"
-			on:click={toggleLineCollapse}
-		>
-			<SvgIcon size={16} ref={lineCollapseIcon} />
-		</button>
-	{/if}
+<div bind:this={container} class={side}>
+	<slot {doc} />
 </div>
 {/if}
 
@@ -75,13 +54,16 @@ function toggleLineCollapse() {
 div {
 	position: absolute;
 	top: 200px;
-	left: 0;
 	display: flex;
 	align-items: center;
-}
-
-.collapse {
-	padding: 2px;
-	margin-right: 4px;
+	
+	&.left {
+		left: 0;
+		padding-right: 4px;
+	}
+	&.right {
+		right: 0;
+		padding-left: 4px;
+	}
 }
 </style>

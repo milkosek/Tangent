@@ -20,6 +20,7 @@ export let showIcon = true
 export let showFileType = false
 export let showModDate = false
 export let highlightName = true
+export let shrinkNonHighlights = true
 export let nameMatch: SearchMatchResult = null
 
 $: content = getContent(node, relativeTo, showFileType, nameMatch)
@@ -98,7 +99,7 @@ function getContent(node: TreeNode, relativeTo: string | TreeNode, showFileType:
 			}, [0, dirName.length + 1])
 			annotations = applyAnnotation(annotations, {
 				className: 'name'
-			}, [dirname.length + 1, extenstionStart])
+			}, [dirName.length + 1, extenstionStart])
 		}
 		else {
 			annotations = applyAnnotation(annotations, {
@@ -131,7 +132,7 @@ function getContent(node: TreeNode, relativeTo: string | TreeNode, showFileType:
 
 </script>
 
-<div class="NodeLine" class:header={nameMatch?.type === 'header'}>
+<div class="NodeLine" class:header={nameMatch?.type === 'header'} class:shrinkNonHighlights>
 	{#if showIcon}<NodeIcon {node} size="1em" />{/if}
 	<span class="path" class:highlightName>{@html content}</span>
 	{#if showModDate}
@@ -162,11 +163,21 @@ div > :global(svg) {
 	}
 }
 
-.path :global(.directory), .path :global(.fileType), .path :global(.headerHash), .date, .NodeLine.header :global(.name) {
+.path :global(.directory), .path :global(.fileType), .path :global(.headerHash), .date {
 	// When highlighted, this looks better as it adjusts to the background color
 	opacity: 60%;
+
+	.shrinkNonHighlights & {
+		font-size: 80%;
+	}
+}
+
+.NodeLine.header :global(.name) {
+	// When highlighted, this looks better as it adjusts to the background color
+	opacity: 60%;
+}
+.NodeLine.header.shrinkNonHighlights :global(.name) {
 	font-size: 80%;
-	line-height: 125%;
 }
 
 .path :global(.headerHash) {
@@ -174,12 +185,14 @@ div > :global(svg) {
 	padding: 0 .2em;
 }
 
-.path :global(.fileType):not(.highlighted) {
-	display: none;
-}
-
 .path :global(.directory) {
 	margin-right: .125em;
+}
+
+.NodeLine.shrinkNonHighlights .path :global(.fileType):last-child {
+	align-self: last baseline;
+	position: relative;
+	bottom: .1em;
 }
 
 .date {

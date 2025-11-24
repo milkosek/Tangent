@@ -19,7 +19,7 @@ import { NoteViewState } from './nodeViewStates'
 import Settings from 'common/settings/Settings'
 import { EmbedType, getEmbedType } from 'common/embedding'
 import EmbedFile from './EmbedFile'
-import { ContextMenuCommand, ContextMenuConstructorOptions, extractRawTemplate, prepareContextMenuCommands, SplitContextMenuTemplate } from './contextmenu'
+import { buildMainMenu, ContextMenuCommand, ContextMenuConstructorOptions, extractRawTemplate, prepareContextMenuCommands, prepareMainMenuForElectron, SplitContextMenuTemplate } from './menus'
 import DataFile from './DataFile'
 import { dataTypes, DataType } from 'common/dataTypes'
 import type WorkspaceSettings from 'common/dataTypes/WorkspaceSettings'
@@ -39,9 +39,9 @@ import CustomStyleManager from 'app/style/CustomStyleManager'
 import { HrefFormedLink } from 'common/indexing/indexTypes'
 import { Readable, derived, readable } from 'svelte/store'
 import NodeHandle, { HandleResult } from './NodeHandle'
-import { swapRemove } from '@such-n-such/core'
+import { swapRemove, wait } from '@such-n-such/core'
 import CodeThemeManager from 'app/style/CodeThemeManager'
-import { shortcutToElectronShortcut } from 'app/utils/shortcuts'
+import CreationRule from 'common/settings/CreationRule'
 
 const menuContext = {}
 
@@ -70,6 +70,7 @@ export default class Workspace extends EventDispatcher {
 
 	commands: WorkspaceCommands
 	private commandUnsubs:  (() => void)[]
+	private dirtyCommands: WorkspaceCommand[] = []
 
 	updateState: UpdateState
 
@@ -159,12 +160,19 @@ export default class Workspace extends EventDispatcher {
 
 		this.commands = workspaceCommands(this)
 		this.commandUnsubs = Object.keys(this.commands).map(key => {
-			const command = this.commands[key] as Command
+			const command = this.commands[key]
 			return command.subscribe(() => {
-				// TODO: Send menu updates
-				api.postMenuUpdate({
-					[key]: this.translateCommandToMenu(command)
-				})
+				if (!this.dirtyCommands.length) {
+					wait().then(() => {
+						const payload: any = {}
+						for (const command of this.dirtyCommands) {
+							payload[command.id] = this.translateCommandToMenu(command)
+						}
+						api.menus.updateCommandState(payload)
+						this.dirtyCommands = []
+					})
+				}
+				this.dirtyCommands.push(command)
 			})
 		})
 
@@ -180,6 +188,18 @@ export default class Workspace extends EventDispatcher {
 				handle.pushChangesIfDirty()
 			}
 		})
+
+		const sendMainMenu = () => {
+			const template = buildMainMenu(this)
+			const electronTemplate = prepareMainMenuForElectron(template)
+
+			try {
+				this.api.menus.setMainMenu(electronTemplate)
+			}
+			catch (e) {
+				console.error('Could not send main menu', e, electronTemplate)
+			}
+		}
 
 		this.settings.keymap.subscribe(keymap => {
 			// Revert to default
@@ -198,17 +218,7 @@ export default class Workspace extends EventDispatcher {
 				}
 			}
 
-			// Update electron menus
-			let menuUpdate = {}
-			for (const key of Object.keys(this.commands)) {
-				const command = this.commands[key]
-				
-				if (command.shortcuts?.length) {
-					menuUpdate[key] = shortcutToElectronShortcut(command.shortcuts[0])
-				}
-			}
-
-			this.api.updateMenuAccelerators(menuUpdate)
+			sendMainMenu()
 		})
 
 		api.onWorkspaceAction((actionName, ...payload) => {
@@ -223,10 +233,10 @@ export default class Workspace extends EventDispatcher {
 			}	
 		})
 
-		api.onMenuAction(async actionName => {
+		api.menus.onMenuCommand(async commandId => {
 			try {
 				if (this.contextMenuCommands) {
-					const contextCommand = this.contextMenuCommands.get(actionName)
+					const contextCommand = this.contextMenuCommands.get(commandId)
 					if (contextCommand) {
 						const { command, commandContext, click } = contextCommand
 						if (command instanceof WorkspaceCommand) {
@@ -251,42 +261,24 @@ export default class Workspace extends EventDispatcher {
 					console.log('Denied! Modal is open.')
 					return
 				}
-				const command = this.commands[actionName]
+				const command = this.commands[commandId]
 				if (command) {
 					if (command.canExecute(menuContext)) {
-						console.log('Invoking command', actionName, 'from main')
+						console.log('Invoking command', commandId, 'from main')
 						command.execute(menuContext)
 					}
 				}
 				else {
-					console.error('No command found for', actionName)
+					console.error('No command found for', commandId)
 				}
 			}
 			catch (err) {
-				console.error('Failed to run command', actionName)
+				console.error('Failed to run command', commandId)
 				console.error(err)
 			}
 		})
 
-		const sendAllCommands = () => {
-			try {
-				let result:any = {}
-				
-				for (const key of Object.keys(this.commands)) {
-					result[key] = this.translateCommandToMenu(this.commands[key])
-				}
-
-				api.postMenuUpdate(result)
-			}
-			catch (e) {
-				console.error('Sending all commands failed')
-				console.log(e)
-			}
-		}
-
-		sendAllCommands()
-
-		api.onGetAllMenus(sendAllCommands)
+		api.menus.onRequestAllMenus(sendMainMenu)
 
 		this.updateState = new UpdateState(api.update)
 
@@ -322,6 +314,23 @@ export default class Workspace extends EventDispatcher {
 	 * Utility Functions
 	 */
 	nodeConstructor(raw: TreeNode) {
+		if (!raw) {
+			this.api.postMessage({
+				type: 'error',
+				title: 'File Model Error',
+				message: 'The workspace attempted to construct a null node. This is invalid. Please reach out to the developers with your logs.'
+			})
+			return null
+		}
+		if (typeof raw.fileType !== 'string') {
+			this.api.postMessage({
+				type: 'error',
+				title: 'File Model Error',
+				message: 'The workspaces attempted to construct a node with an invalid fileType field. Please reach out to the developers with your logs.'
+			})
+			console.error('Tree node has an invalid filetype:', raw)
+			return null
+		}
 		switch (raw.fileType) {
 			case 'folder':
 				return new Folder(raw, this)
@@ -727,17 +736,43 @@ export default class Workspace extends EventDispatcher {
 	}
 
 	showContextMenu(template: SplitContextMenuTemplate | ContextMenuConstructorOptions[]) {
+		// Delay context menu processing so that selection from the click has propagated 
+		wait().then(() => {
+			const context = prepareContextMenuCommands(template)
+			this.contextMenuCommands = context.commands
+			
+			const raw = extractRawTemplate(context)
 
-		const context = prepareContextMenuCommands(template)
-		this.contextMenuCommands = context.commands
-		
-		const raw = extractRawTemplate(context)
+			try {
+				this.api.menus.showContextMenu(raw)
+			} catch (e) {
+				console.error('Could not show context menu', raw)
+			}
+		})
+	}
 
-		try {
-			this.api.showContextMenu(raw)
-		} catch (e) {
-			console.error('Could not show context menu', raw)
+	validateShortcut(shortcut: string, target: any) {
+		const targetIsCommand = target instanceof WorkspaceCommand
+		for (const key of Object.keys(this.commands)) {
+			const command = this.commands[key]
+			if (command === target) continue
+			if (command.shortcuts && (!command.group || (targetIsCommand && target.group.startsWith(command.group)))) {
+				for (const sc of command.shortcuts) {
+					if (sc == shortcut) {
+						return 'This shortcut is used by "' + command.getName() + '"'
+					}
+				}
+			}
 		}
+
+		for (const rule of this.workspaceSettings.value.creationRules.value) {
+			if (rule === target) continue
+			if (rule.shortcut.value === shortcut) {
+				return 'This shortcut is used by the creation rule "' + rule.name.value + '"'
+			}
+		}
+
+		return null
 	}
 
 	shutdown() {

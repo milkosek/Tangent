@@ -57,6 +57,10 @@ export default abstract class Command {
 		}
 	}
 
+	canExecuteFromShortcut(shortcut: string, context?: CommandContext): boolean {
+		return this.shortcuts?.includes(shortcut) && this.canExecute(context)
+	}
+
 	canExecute(context?: CommandContext): boolean {
 		return true
 	}
@@ -89,21 +93,33 @@ export default abstract class Command {
 	}
 }
 
-export function createCommandHandler(commands: Command[]) {
+type CommandHandlerOptions = {
+	restrictForInput?: boolean
+	// Optionally create a context passed to commands
+	buildContext?(context: CommandContext)
+}
+
+export function createCommandHandler(commands: Command[], options?: CommandHandlerOptions) {
 	return (event: KeyboardEvent) => {
 		if (event.defaultPrevented) return
-		if (!eventIsShortcutable(event)) return
+		if ((options?.restrictForInput ?? true) && !eventIsShortcutable(event)) return
 
 		const shortcut = shortcutFromEvent(event)
 		const context = { initiatingEvent: event }
 
+		if (options?.buildContext) {
+			options.buildContext(context)
+		}
+
 		for (const command of commands) {
-			if (command.shortcuts?.includes(shortcut) && command.canExecute(context)) {
+			if (command.canExecuteFromShortcut(shortcut, context)) {
 				event.preventDefault()
 				console.log(`Executing "${command.getLabel(context)}" by way of ${shortcut}`)
 				command.execute(context)
-				return
+				return true
 			}
 		}
+
+		false
 	}
 }

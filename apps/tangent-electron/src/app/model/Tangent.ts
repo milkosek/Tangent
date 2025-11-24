@@ -126,7 +126,7 @@ export default class Tangent {
 							return new ImageViewState(node)
 						case EmbedType.Audio:
 						case EmbedType.Video:
-							return new AudioVideoViewState(node)
+							return new AudioVideoViewState(context, node)
 						case EmbedType.PDF:
 							return new PdfViewState(node)
 					}
@@ -339,5 +339,14 @@ export default class Tangent {
 				console.error('Did not create view state for:', node)
 			}
 		}
+	}
+
+	getCurrentViewState() {
+		let view = this.currentThreadState.value
+		if (!view) return null
+		if (view.currentLens.value.currentlyRepresenting) {
+			return view.currentLens.value.currentlyRepresentingView
+		}
+		return view
 	}
 }

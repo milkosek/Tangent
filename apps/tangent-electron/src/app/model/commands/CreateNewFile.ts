@@ -247,19 +247,51 @@ export default class CreateNewFileCommand extends WorkspaceCommand {
 		return newNode
 	}
 
+	canExecute(context?: CreateNewFileCommandContext): boolean {
+		return true
+	}
+
+	canExecuteFromShortcut(shortcut: string, context?: CreateNewFileCommandContext): boolean {
+		// Do shenanigans to check for other rules, modifying the context if necessary
+		if (!super.canExecuteFromShortcut(shortcut, context) && !context?.rule) {
+			for (const rule of this.workspace.workspaceSettings.value.creationRules.value) {
+				if (rule.shortcut.value === shortcut) {
+					if (context) context.rule = rule
+					if (this.canExecute(context)) {
+						return true
+					}
+				}
+			}
+			if (context) delete context.rule
+			return false
+		}
+		return true
+	}
+
 	execute(context: CreateNewFileCommandContext): TreeNode {
 		const debug = this.workspace.debug.fileCreation
 		if (debug) console.log('Creating file', context)
 		
 		// Forward to createNode for easy post-creation handling here
-		let newNode = this.createNode(this.resolveContext(context)) 
+		const values = this.resolveContext(context)
+		if (!values) return
+		let newNode = this.createNode(values) 
 		if (newNode) {
 			if (context?.updateSelection ?? true) {
+				const { directoryStore, viewState } = this.workspace
+
+				if (viewState.tangent.thread.value?.includes(newNode)) {
+					// If we're already looking at it, just focus it
+					viewState.tangent.activeSession.value.updateThread({
+						currentNode: newNode,
+						thread: 'retain'
+					})
+					return
+				}
+
 				const nav: NavigationData = {
 					target: newNode
 				}
-
-				const { directoryStore, viewState } = this.workspace
 
 				let navigateFrom = context?.navigateFrom
 				const rule = context?.rule
@@ -298,7 +330,7 @@ export default class CreateNewFileCommand extends WorkspaceCommand {
 				context: {
 					rule
 				},
-				shortcuts: null
+				shortcuts: rule.shortcut.value ? [rule.shortcut.value] : null
 			})
 		}
 

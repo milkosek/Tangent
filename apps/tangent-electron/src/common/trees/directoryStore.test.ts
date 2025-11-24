@@ -245,6 +245,11 @@ describe('Resolving & Creating Partial Path Matches', () => {
 					name: 'Note Name',
 					path: 'some/root/Note Name.md',
 					fileType: '.md'
+				},
+				{
+					name: 'Note Name.foo',
+					path: 'some/root/Note Name.foo',
+					fileType: 'folder'
 				}
 			]
 		}
@@ -378,7 +383,8 @@ describe('Resolving & Creating Partial Path Matches', () => {
 				root.children[2],
 				root.children[4],
 				root.children[6],
-				root.children[7]
+				root.children[7],
+				root.children[8]
 			])
 	})
 
@@ -453,6 +459,12 @@ describe('Resolving & Creating Partial Path Matches', () => {
 				root.children[5].children[0], { length: 'short', includeExtension: false }
 			)).toEqual('Test Name/Test Name')
 		})
+
+		it('Should identify a folder by a trailing `/` if there is ambiguity', () => {
+			expect(store.getPathToItem(
+				root.children[6], { length: 'short' }
+			)).toEqual('Note Name/')
+		})
 	})
 
 	test('Find folders', () => {
@@ -467,6 +479,13 @@ describe('Resolving & Creating Partial Path Matches', () => {
 
 		expect(store.getMatchesForPath('Note Name', { bestOnly: true }))
 			.toBe(store.getRoot(0).children[7])
+	})
+
+	it('Can identify a folder with `/` when a folder and a file share the same name', () => {
+		const store = getTestStore()
+
+		expect(store.getMatchesForPath('Note Name/', { bestOnly: true }))
+			.toBe(store.getRoot(0).children[6])
 	})
 })
 

@@ -39,7 +39,7 @@ import { scrollTo } from 'app/utils';
 import { type NavigationData } from 'app/events'
 import WorkspaceFileHeader from 'app/utils/WorkspaceFileHeader.svelte';
 import TangentLink from './t-link';
-import { appendContextTemplate, ContextMenuConstructorOptions } from 'app/model/contextmenu';
+import { appendContextTemplate, ContextMenuConstructorOptions } from 'app/model/menus';
 import { getInitialSelection } from 'common/markdownModel';
 import { marginToAxis, ScrollToOptions } from 'app/utils/scrollto';
 import { timedLatch } from 'app/utils/svelte';
@@ -63,6 +63,10 @@ import { revealContentAroundRange } from './editorModule';
 import { fly } from 'svelte/transition';
 import LineGutter from './LineGutter.svelte';
 import { derived } from 'svelte/store';
+import { EmbedFile } from 'app/model';
+    import LineGutterLeft from './LineGutterLeft.svelte';
+    import LineGutterRight from './LineGutterRight.svelte';
+    import { target } from 'app/webpack.config';
 
 // Technically, this just needs to exist _somewhere_. Putting it here because of the svelte dependency
 // Force the use of the variable so that it is included in the bundle
@@ -938,7 +942,9 @@ function onEditorMouseUp(event: MouseEvent) {
 /////////////////////////////
 // Line gutter adornments //
 ///////////////////////////
-let hoveredLineTarget: { element: HTMLElement, index: number } = null
+type LineTarget = { element: HTMLElement, index: number }
+let leftHoverdLineTarget: LineTarget = null
+let rightHoveredLineTarget: LineTarget = null
 
 function onMouseMove(event: MouseEvent) {
 
@@ -946,28 +952,50 @@ function onMouseMove(event: MouseEvent) {
 	const lines = editorElement.querySelectorAll('.line')
 
 	const count = lines.length
+
+	let clearLeft = true
+	let clearRight = true
+	
 	for (let i = 0 ; i < count; i++) {
 		const lineElement = lines.item(i) as HTMLElement
 		const lineBounds = lineElement.getBoundingClientRect()
 
-		if (event.clientY > lineBounds.top && event.clientY <= lineBounds.bottom
-			&& event.clientX > bounds.left - 50 && event.clientX < lineBounds.left + 150
-		) {
-			if (hoveredLineTarget?.element !== lineElement) {
-				hoveredLineTarget = {
-					element: lineElement,
-					index: i
+		if (event.clientY > lineBounds.top && event.clientY <= lineBounds.bottom) {
+			console.log({
+				left: lineBounds.left,
+				right: lineBounds.right,
+				x: event.x
+			})
+			if (event.clientX > lineBounds.left - 50 && event.clientX < lineBounds.left + 150) {
+				if (leftHoverdLineTarget?.element !== lineElement) {
+					leftHoverdLineTarget = {
+						element: lineElement,
+						index: i
+					}
 				}
+				clearLeft = false
 			}
-			return
+
+			if (event.clientX > lineBounds.right - 150 && event.clientX < lineBounds.right + 50) {
+				if (rightHoveredLineTarget?.element !== lineElement) {
+					rightHoveredLineTarget = {
+						element: lineElement,
+						index: i
+					}
+				}
+				clearRight = false
+			}
+			break
 		}
 	}
 
-	if (hoveredLineTarget) hoveredLineTarget = null
+	if (clearLeft) leftHoverdLineTarget = null
+	if (clearRight) rightHoveredLineTarget = null
 }
 
 function onMouseLeave(event: MouseEvent) {
-	if (hoveredLineTarget) hoveredLineTarget = null
+	if (leftHoverdLineTarget) leftHoverdLineTarget = null
+	if (rightHoveredLineTarget) rightHoveredLineTarget = null
 }
 //// End ////
 
@@ -1055,6 +1083,15 @@ function onContextMenu(event: MouseEvent) {
 						}
 					}
 				)
+
+				if (resolution instanceof EmbedFile) {
+					if (resolution.canCopyToClipboard()) {
+						menu.push({
+							command: workspace.commands.copyFileToClipboard,
+							commandContext: { file: resolution }
+						})
+					}
+				}
 			}
 		}
 		else if (linkState === 'untracked') {
@@ -1412,7 +1449,8 @@ function onDetailsContexMenu(event: MouseEvent) {
 			<CodeBlockAutocompleteMenu {handler} />
 		{/if}
 	</AutoCompleteMenu>
-	<LineGutter {editor} target={hoveredLineTarget} />
+	<LineGutterLeft {editor} target={leftHoverdLineTarget} />
+	<LineGutterRight {editor} target={rightHoveredLineTarget} />
 </main>
 
 {#if state.detailMode}

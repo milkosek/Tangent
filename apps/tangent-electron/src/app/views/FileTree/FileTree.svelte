@@ -3,16 +3,21 @@ import { wait } from '@such-n-such/core'
 import type { TreeNode } from 'common/trees'
 
 import type DirectoryView from 'app/model/directoryView'
-import { getContext, tick } from 'svelte';
+import { getContext } from 'svelte'
 import type Workspace from 'app/model/Workspace'
 import WorkspaceTreeNode from 'app/model/WorkspaceTreeNode'
-import { isModKey } from 'app/utils/events';
-import { appendContextTemplate, ContextMenuConstructorOptions } from 'app/model/contextmenu';
-import LazyScrolledList from 'app/utils/LazyScrolledList.svelte';
-import type { NavigationData } from 'app/events';
-import { getTreeNodeTransfer, hasTreeNodeTransfer, setTreeNodeTransfer } from 'app/utils/dragDrop';
-import { queryFileType } from 'common/dataTypes/QueryInfo';
-import NodeIcon from '../smart-icons/NodeIcon.svelte';
+import { createCommandHandler } from 'app/model/commands/Command'
+import { SidebarCommandContext } from 'app/model/commands/SidebarCommands'
+import { isModKey } from 'app/utils/events'
+import { appendContextTemplate, ContextMenuConstructorOptions } from 'app/model/menus'
+import LazyScrolledList from 'app/utils/LazyScrolledList.svelte'
+import { tooltip } from 'app/utils/tooltips'
+import type { NavigationData } from 'app/events'
+import { getTreeNodeTransfer, hasTreeNodeTransfer, setTreeNodeTransfer } from 'app/utils/dragDrop'
+import { queryFileType } from 'common/dataTypes/QueryInfo'
+import NodeIcon from '../smart-icons/NodeIcon.svelte'
+import NodeTooltip from '../node-views/NodeTooltip.svelte'
+import { EmbedFile } from 'app/model'
 
 let workspace = getContext('workspace') as Workspace
 
@@ -26,6 +31,7 @@ export let directoryView: DirectoryView
 let container: HTMLElement = null
 let renameTarget: TreeNode = null
 let renameElement: HTMLElement = null
+let focusedItem: TreeNode = null
 
 $: {
 	if (renameElement) {
@@ -75,7 +81,7 @@ function itemChildrenClass(item: WorkspaceTreeNode) {
 	return 'ChildOf_' + item.localId
 }
 
-function itemClicked(event: MouseEvent, item:TreeNode) {
+function itemClicked(event: MouseEvent | KeyboardEvent, item:TreeNode) {
 
 	if (workspace.viewState.tangent.currentNode.value === item) {
 		return
@@ -135,6 +141,13 @@ function itemContext(event: MouseEvent, item: TreeNode) {
 			}
 		})
 
+		if (item instanceof EmbedFile && item.canCopyToClipboard()) {
+			menu.push({
+				command: workspace.commands.copyFileToClipboard,
+				commandContext: { file: item }
+			})
+		}
+
 		menu.push({
 			command: workspace.commands.duplicateNode,
 			commandContext: {
@@ -159,8 +172,6 @@ function renameNode() {
 	if (renameTarget instanceof WorkspaceTreeNode && renameTarget.name !== newName) {
 		renameTarget.rename(newName)
 	}
-
-	renameTarget = null
 }
 
 function startNodeRename(item: TreeNode) {
@@ -174,8 +185,20 @@ function onRenameKeydown(event: KeyboardEvent) {
 	if (event.key === 'Enter') {
 		event.preventDefault()
 		event.stopPropagation()
+		renameNode()
 		renameElement.blur()
+		return
 	}
+	if (event.key === 'Escape') {
+		event.preventDefault()
+		event.stopPropagation()
+		renameElement.blur()
+		return
+	}
+}
+
+function onRenameBlur(event: Event) {
+	renameTarget = null
 }
 
 function showFileType(item: TreeNode) {
@@ -261,6 +284,57 @@ function drop(event: DragEvent, item: TreeNode) {
 	}
 }
 
+const commandHandler = createCommandHandler(
+	Object.values(workspace.commands).filter(c => c.group === 'Sidebar'),
+	{
+		restrictForInput: false,
+		buildContext(context: SidebarCommandContext) {
+			context.currentItem = focusedItem
+			context.setRenameTarget = (node: TreeNode) => {
+				renameTarget = node
+			}
+		}
+	}
+)
+
+function onKeydown(event: KeyboardEvent, item: TreeNode) {
+	if (commandHandler(event) || renameElement) {
+		return
+	}
+
+	const index = visibleItems.indexOf(item)
+	if (index < 0) return
+
+	const isOpen = directoryView.isItemOpen(item)
+
+	if (index > 0 && (event.key === 'ArrowUp' || event.key === 'ArrowLeft' && !isOpen)) {
+		const previous = (event.target as HTMLElement).previousElementSibling
+		if (previous instanceof HTMLElement) {
+			previous.focus()
+			event.preventDefault()
+			return
+		}
+	}
+	if (index < visibleItems.length - 1 && (event.key === 'ArrowDown' || event.key === 'ArrowRight' && isOpen)) {
+		const next = (event.target as HTMLElement).nextElementSibling
+		if (next instanceof HTMLElement) {
+			next.focus()
+			event.preventDefault()
+			return
+		}
+	}
+
+	if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+		directoryView.toggleOpen(item)
+		event.preventDefault()
+		return
+	}
+
+	if (event.key === 'Enter') {
+		return itemClicked(event, item)
+	}
+}
+
 </script>
 
 <div bind:this={container}>
@@ -268,6 +342,7 @@ function drop(event: DragEvent, item: TreeNode) {
 	<!-- svelte-ignore a11y-click-events-have-key-events -->
 	<!-- svelte-ignore a11y-no-static-element-interactions -->
 	<div
+		tabindex="-1"
 		slot="item" let:item
 		class={itemClass(item)}
 		class:isSelected={$selection.includes(item)}
@@ -285,6 +360,16 @@ function drop(event: DragEvent, item: TreeNode) {
 		on:dragenter={event => dragEnter(event, item)}
 		on:dragleave={event => dragLeave(event, item)}
 		on:drop={event => drop(event, item)}
+		on:focus={event => focusedItem = item}
+
+		on:keydown={event => onKeydown(event, item)}
+		
+		use:tooltip={{
+			tooltip: NodeTooltip,
+			args: { node: item },
+			interactive: true,
+			placement: 'right'
+		}}
 		>
 		{#each {length: item.depth ? item.depth - 1 : 0} as _, i}
 			<span class="depth"
@@ -313,8 +398,8 @@ function drop(event: DragEvent, item: TreeNode) {
 			<span class="name rename"
 				contenteditable="true"
 				bind:this={renameElement}
-				on:blur={renameNode}
 				on:keydown={onRenameKeydown}
+				on:blur={onRenameBlur}
 			>{item.name}</span>
 		{:else}
 			<span class="name"
@@ -352,6 +437,10 @@ function drop(event: DragEvent, item: TreeNode) {
 			border-top-right-radius: var(--borderRadius);
 			border-bottom-right-radius: var(--borderRadius);
 		}
+	}
+
+	&:focus {
+		background-color: var(--keySelectionBackgroundColor);
 	}
 
 	&:hover, &.isSelected {
